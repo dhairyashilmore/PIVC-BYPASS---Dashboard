@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PIVC Bypass Analysis - Executive Power BI Dashboard</title>
+  <meta name="description" content="Executive Power BI Dashboard for PIVC Bypass Analysis with KPIs, monthly trends, user breakdown, and DAX modeling.">
+  <link rel="stylesheet" href="dashboard.css?v=2.2">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com">
+  <link href="https://fonts.googleapis.com/css2?family=Segoe+UI:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <!-- SheetJS to parse user's 18,744 row Excel file client-side instantly -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+
+  <!-- Top Header Navigation -->
+  <header class="top-header">
+    <div class="header-content">
+      <div class="header-brand">
+        <div class="brand-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            <path d="m9 12 2 2 4-4"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>PIVC Bypass Analysis <span class="brand-badge">Executive Monitor</span></h1>
+          <p>Tracking video KYC exceptions, monthly volume trends, risk flags, and assignee workload</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <!-- Live Dataset Indicator -->
+        <div id="datasetBadge" class="dataset-indicator" title="Current active dataset">
+          <span class="pulse-dot"></span>
+          <span id="datasetLabel">PIVC_bypass_500_records.csv (500 rows)</span>
+        </div>
+
+        <!-- Excel File Upload -->
+        <label class="btn btn-upload" title="Upload your original 18,744 record Excel file (.xlsx, .xls, .csv)">
+          <input type="file" id="excelFileInput" accept=".xlsx, .xls, .csv">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Load My Excel File (.xlsx)
+        </label>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="main-container">
+
+    <!-- Excel Drag & Drop Callout Banner -->
+    <section class="upload-drop-banner" id="dropBanner">
+      <div class="banner-content">
+        <div class="banner-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="12" y2="12"/><line x1="15" y1="15" x2="12" y2="12"/></svg>
+        </div>
+        <div class="banner-text">
+          <h4 id="bannerHeading">Have your original Excel file (18,744 records)?</h4>
+          <p id="bannerSubtext">Click <strong>"Browse Excel File"</strong> or drag and drop your <code>.xlsx</code> / <code>.xls</code> file here. It processes all 18,744 records in seconds entirely in your browser!</p>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <label class="btn btn-upload">
+          <input type="file" id="bannerFileInput" accept=".xlsx, .xls, .csv">
+          📁 Browse Excel File (.xlsx)
+        </label>
+      </div>
+    </section>
+
+    <!-- Slicers / Filters Section -->
+    <section class="filter-bar" aria-label="Dashboard Slicers">
+      <div class="filter-bar-header">
+        <span class="filter-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+          Power BI Slicers & Filters
+        </span>
+        <button id="resetFiltersBtn" class="reset-link">Reset All Filters</button>
+      </div>
+
+      <div class="slicer-controls">
+        <!-- Slicer 1: Month-Year -->
+        <div class="slicer-group">
+          <label class="slicer-label" for="slicerMonth">Month-Year (Chronological)</label>
+          <select id="slicerMonth" class="slicer-select">
+            <option value="All">All Months (Jan - Sep 2024)</option>
+          </select>
+        </div>
+
+        <!-- Slicer 2: Approval Status -->
+        <div class="slicer-group">
+          <label class="slicer-label" for="slicerStatus">Approval Status</label>
+          <select id="slicerStatus" class="slicer-select">
+            <option value="All">All Statuses</option>
+          </select>
+        </div>
+
+        <!-- Slicer 3: User ID -->
+        <div class="slicer-group">
+          <label class="slicer-label" for="slicerUser">User ID</label>
+          <select id="slicerUser" class="slicer-select">
+            <option value="All">All Users</option>
+          </select>
+        </div>
+
+        <!-- Slicer 4: Assigned To -->
+        <div class="slicer-group">
+          <label class="slicer-label" for="slicerAssignee">Assigned To</label>
+          <select id="slicerAssignee" class="slicer-select">
+            <option value="All">All Assignees</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <!-- Top KPI Cards -->
+    <section class="kpi-grid" aria-label="Key Performance Indicators">
+      
+      <!-- KPI 1: Total Applications -->
+      <article class="kpi-card kpi-primary">
+        <div class="kpi-header">
+          <span class="kpi-title">Total Applications</span>
+          <div class="kpi-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          </div>
+        </div>
+        <div class="kpi-value-row">
+          <span id="kpiTotalApps" class="kpi-value">0</span>
+        </div>
+        <div class="kpi-subtitle">
+          <span>Distinct Count of APPLICATION_NO</span>
+        </div>
+      </article>
+
+      <!-- KPI 2: Total Bypass Applications -->
+      <article class="kpi-card kpi-bypass">
+        <div class="kpi-header">
+          <span class="kpi-title">Total Bypass Applications</span>
+          <div class="kpi-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          </div>
+        </div>
+        <div class="kpi-value-row">
+          <span id="kpiBypassApps" class="kpi-value" style="color:var(--bypass-color);">0</span>
+        </div>
+        <div class="kpi-subtitle">
+          <span>Status = Exception OR "Bypass request" in remarks</span>
+        </div>
+      </article>
+
+      <!-- KPI 3: Bypass Percentage -->
+      <article class="kpi-card kpi-rate">
+        <div class="kpi-header">
+          <span class="kpi-title">Bypass Percentage</span>
+          <div class="kpi-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></svg>
+          </div>
+        </div>
+        <div class="kpi-value-row">
+          <span id="kpiBypassPct" class="kpi-value" style="color:#d83b01;">0.0%</span>
+          <span id="kpiBadgePct" class="kpi-badge badge-warning">Calculating...</span>
+        </div>
+        <div class="kpi-subtitle">
+          <span>Bypass Applications ÷ Total Applications</span>
+        </div>
+      </article>
+
+      <!-- KPI 4: Regular (Non-Bypass) Applications -->
+      <article class="kpi-card kpi-regular">
+        <div class="kpi-header">
+          <span class="kpi-title">Regular Applications</span>
+          <div class="kpi-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          </div>
+        </div>
+        <div class="kpi-value-row">
+          <span id="kpiRegularApps" class="kpi-value" style="color:var(--regular-color);">0</span>
+        </div>
+        <div class="kpi-subtitle">
+          <span>System Automated (Null) & Standard Verified</span>
+        </div>
+      </article>
+
+      <!-- KPI 5: Daily Bypass Pace & Peak Day -->
+      <article class="kpi-card kpi-daily">
+        <div class="kpi-header">
+          <span class="kpi-title">Daily Bypass Pace</span>
+          <div class="kpi-icon" style="background:#eff6fc;color:#0078d4;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          </div>
+        </div>
+        <div class="kpi-value-row">
+          <span id="kpiDailyAvg" class="kpi-value" style="color:#0078d4;">0 / day</span>
+        </div>
+        <div class="kpi-subtitle">
+          <span id="kpiDailyPeak">Peak: 0 on --</span>
+        </div>
+      </article>
+
+    </section>
+
+    <!-- Visuals Grid: Row 1 (Monthly Overview) -->
+    <div class="visuals-grid">
+      
+      <!-- Visual 1: Column chart showing Bypass Count by Month & Whole Month Dates with Scrolling Bar -->
+      <section class="visual-card card-span-7" id="v1CardSection">
+        <div class="visual-header">
+          <div class="visual-title-group">
+            <h3 id="v1Title">Bypass Count by Whole Month Dates</h3>
+            <p id="v1Subtitle">Day-by-day dates across the month</p>
+          </div>
+          <div class="visual-header-actions">
+            <!-- Month selector for Whole Month Dates -->
+            <select id="v1MonthPicker" class="slicer-select" style="display:none;padding:3px 8px;font-size:0.75rem;width:auto;height:28px;" title="Pick a specific month to see all its calendar dates">
+              <option value="All">All Months (Continuous)</option>
+            </select>
+
+            <div class="view-toggle-group">
+              <button id="v1BtnMonthly" class="toggle-btn">By Month</button>
+              <button id="v1BtnDates" class="toggle-btn active">Whole Month Dates</button>
+            </div>
+            <span class="visual-tag">Column Chart</span>
+          </div>
+        </div>
+
+        <!-- Scrollable Chart Canvas -->
+        <div id="barChartMonthlyScroll" class="chart-scroll-container" tabindex="0" role="region" aria-label="Horizontal scrollable chart of whole month dates">
+          <div id="barChartMonthly" class="chart-wrapper"></div>
+        </div>
+
+        <!-- Power BI Style Date Scrolling Bar & Range Scrubber -->
+        <div class="date-scroll-control-bar" id="v1DateScrollBar">
+          <div class="scroll-bar-header">
+            <div class="scroll-bar-label">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              <span id="v1ScrollInfoText">Whole Month Dates: Drag slider or scroll bar to browse dates</span>
+            </div>
+            <div class="scroll-quick-jumps">
+              <span style="font-size:0.7rem;color:var(--text-muted);margin-right:2px;">Quick Jump:</span>
+              <button class="quick-jump-btn" id="v1JumpStart" title="Jump to Beginning of Month">⏮ 1st</button>
+              <button class="quick-jump-btn" id="v1JumpMid" title="Jump to Mid-Month">⏸ 15th</button>
+              <button class="quick-jump-btn" id="v1JumpEnd" title="Jump to End of Month">⏭ 30th/31st</button>
+            </div>
+          </div>
+          <div class="slider-track-container">
+            <span class="slider-bound-label" id="v1DateStartLabel">Day 01</span>
+            <input type="range" id="v1ScrollSlider" min="0" max="100" value="0" class="custom-scroll-slider" title="Drag to scroll through whole month dates">
+            <span class="slider-bound-label" id="v1DateEndLabel">Day 31</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Visual 2: Line chart showing Monthly Bypass Trend & Multi-Metric Graphs -->
+      <section class="visual-card card-span-5">
+        <div class="visual-header">
+          <div class="visual-title-group">
+            <h3 id="lineChartTitle">Monthly Bypass Trend</h3>
+            <p id="lineChartSubtitle">Tracking the monthly bypass percentage (%) trajectory over time</p>
+          </div>
+          <div class="visual-header-actions">
+            <div class="view-toggle-group">
+              <button id="lineModePct" class="toggle-btn active" title="Bypass Percentage Rate Trajectory">Rate %</button>
+              <button id="lineModeDual" class="toggle-btn" title="Dual Lines: Bypass vs Regular Volume">Volume</button>
+              <button id="lineModeCumulative" class="toggle-btn" title="Cumulative Total Bypass Curve">Cumulative</button>
+            </div>
+            <span class="visual-tag" id="lineVisualTag">Line Chart</span>
+          </div>
+        </div>
+        <div id="lineChartTrend" class="chart-wrapper"></div>
+      </section>
+
+    </div>
+
+    <!-- NEW SECTION: Monthly Volume Composition (Stacked & Clustered Bar Charts) -->
+    <div class="visuals-grid">
+      <section class="visual-card card-span-12">
+        <div class="visual-header">
+          <div class="visual-title-group">
+            <h3 id="stackedBarTitle">Monthly Volume Breakdown (Regular vs Bypass Stacked Bars)</h3>
+            <p id="stackedBarSubtitle">Comparative volume distribution of automated system KYC vs exception bypasses</p>
+          </div>
+          <div class="visual-header-actions">
+            <div class="view-toggle-group">
+              <button id="barModeStacked" class="toggle-btn active" title="Stacked Volume Counts">Stacked Bars</button>
+              <button id="barMode100" class="toggle-btn" title="100% Normalized Proportions">100% Stacked</button>
+              <button id="barModeClustered" class="toggle-btn" title="Side-by-side Clustered Bars">Clustered</button>
+            </div>
+            <span class="visual-tag" style="background:#eff6fc;color:#0078d4;font-weight:700;">Bar Chart</span>
+          </div>
+        </div>
+        <div id="stackedBarChart" class="chart-wrapper" style="min-height:260px;width:100%;display:flex;flex-direction:column;align-items:stretch;justify-content:center;"></div>
+        <div class="stacked-legend" id="stackedBarLegend" style="display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:24px;margin-top:14px;font-size:0.8rem;color:var(--text-muted);">
+          <div class="stacked-legend-item" style="display:flex;align-items:center;gap:8px;">
+            <span class="stacked-legend-swatch" style="width:14px;height:14px;border-radius:3px;display:inline-block;background:#107c41;"></span>
+            <span style="font-weight:600;color:var(--text-main);">Regular (System Automated PIVC)</span>
+          </div>
+          <div class="stacked-legend-item" style="display:flex;align-items:center;gap:8px;">
+            <span class="stacked-legend-swatch" style="width:14px;height:14px;border-radius:3px;display:inline-block;background:#d83b01;"></span>
+            <span style="font-weight:600;color:var(--text-main);">Bypass (Exception Overrides)</span>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- NEW SECTION: Daily Bypass Analysis (How many bypass in each day) -->
+    <div class="visuals-grid">
+      <section class="visual-card card-span-12">
+        <div class="visual-header">
+          <div class="visual-title-group">
+            <h3>Daily Bypass Analysis (Bypass Count in Each Day)</h3>
+            <p id="dailyChartSubtitle">Granular day-by-day distribution and daily volume spikes</p>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <label for="dailyViewMode" style="font-size:0.75rem;font-weight:600;color:var(--text-muted);">View Mode:</label>
+              <select id="dailyViewMode" class="slicer-select" style="padding:4px 10px;font-size:0.78rem;width:auto;background:#fff;">
+                <option value="timeline">Chronological Daily Timeline</option>
+                <option value="dow">Day of Week Pattern (Mon - Sun)</option>
+                <option value="top_days">Top 15 Peak Bypass Days</option>
+              </select>
+            </div>
+            <span class="visual-tag" style="background:#eff6fc;color:#0078d4;font-weight:700;">Daily Level</span>
+          </div>
+        </div>
+        <div id="dailyChartWrapper" class="chart-wrapper" style="min-height:270px;overflow-x:auto;"></div>
+      </section>
+    </div>
+
+    <!-- Visuals Grid: Row 2 -->
+    <div class="visuals-grid">
+
+      <!-- Visual 3: Bar chart showing User-wise Workload using USER_ID -->
+      <section class="visual-card card-span-6">
+        <div class="visual-header">
+          <div class="visual-title-group">
+            <h3 id="userBarTitle">User-wise Workload (USER_ID)</h3>
+            <p id="userBarSubtitle">Distribution of bypass volume across submitting users</p>
+          </div>
+          <div class="visual-header-actions">
+            <div class="view-toggle-group">
+              <button id="userMetricBypass" class="toggle-btn active" title="Rank by Bypass Count">Bypass</button>
+              <button id="userMetricTotal" class="toggle-btn" title="Rank by Total Volume">Total</button>
+              <button id="userMetricRate" class="toggle-btn" title="Rank by Bypass Rate %">Rate %</button>
+            </div>
+            <span class="visual-tag">Bar Chart</span>
+          </div>
+        </div>
+        <div id="userBarList" class="bar-list"></div>
+      </section>
+
+      <!-- Visual 4: Bar chart showing Assignee-wise Workload using ASSIGNED_TO -->
+      <section class="visual-card card-span-6">
+        <div class="visual-header">
+          <div class="visual-title-group">
+            <h3 id="assigneeBarTitle">Assignee-wise Workload (ASSIGNED_TO)</h3>
+            <p id="assigneeBarSubtitle">Workload and exception allocation per assigned operational analyst</p>
+          </div>
+          <div class="visual-header-actions">
+            <div class="view-toggle-group">
+              <button id="assigneeMetricBypass" class="toggle-btn active" title="Rank by Bypass Count">Bypass</button>
+              <button id="assigneeMetricTotal" class="toggle-btn" title="Rank by Total Volume">Total</button>
+              <button id="assigneeMetricRate" class="toggle-btn" title="Rank by Bypass Rate %">Rate %</button>
+            </div>
+            <span class="visual-tag">Bar Chart</span>
+          </div>
+        </div>
+        <div id="assigneeBarList" class="bar-list"></div>
+      </section>
+
+    </div>
+
+    <!-- Visuals Grid: Row 3 (Pie Chart & Donut Chart Side-by-Side) -->
+    <div class="visuals-grid">
+
+      <!-- Visual 5A: Dedicated Interactive Pie Chart -->
+      <section class="visual-card card-span-6">
+        <div class="visual-header">
+          <div class="visual-title-group">
+            <h3 id="pieChartTitle">Pie Chart: PIVC Exception Reason Breakdown</h3>
+            <p id="pieChartSubtitle">Proportional breakdown of bypass exception triggers from remarks</p>
+          </div>
+          <div class="visual-header-actions">
+            <div class="view-toggle-group">
+              <button id="pieSubModeReason" class="toggle-btn active" title="Bypass Reason Categories">Reasons</button>
+              <button id="pieSubModeSplit" class="toggle-btn" title="Bypass vs Regular Slices">Bypass vs Regular</button>
+            </div>
+            <span class="visual-tag" style="background:#fdf2f8;color:#be185d;font-weight:700;">Pie Chart</span>
+          </div>
+        </div>
+        <div class="donut-container" style="min-height:240px;justify-content:center;gap:30px;">
+          <div style="position:relative;width:180px;height:180px;flex-shrink:0;">
+            <svg id="standalonePieSvg" viewBox="0 0 100 100" style="width:180px;height:180px;overflow:visible;"></svg>
+          </div>
+          <div class="donut-legend" id="standalonePieLegend" style="max-width:320px;"></div>
+        </div>
+      </section>
+
+      <!-- Visual 5B: Dedicated Donut Chart -->
+      <section class="visual-card card-span-6">
+        <div class="visual-header">
+          <div class="visual-title-group">
+            <h3>Donut Chart: Bypass vs Regular Share</h3>
+            <p>Portfolio proportion of automated system KYC vs manual exception bypasses</p>
+          </div>
+          <span class="visual-tag" style="background:#eff6fc;color:#0078d4;font-weight:700;">Donut Chart</span>
+        </div>
+        <div class="donut-container" style="min-height:240px;justify-content:center;gap:30px;">
+          <div class="donut-svg-wrap" style="position:relative;width:180px;height:180px;flex-shrink:0;">
+            <svg id="donutSvg" viewBox="0 0 100 100" style="width:180px;height:180px;overflow:visible;"></svg>
+            <div class="donut-center-text" id="donutCenterText">
+              <div id="donutPctText" class="donut-center-pct">0.0%</div>
+              <div class="donut-center-lbl">Bypass Share</div>
+            </div>
+          </div>
+          <div class="donut-legend" id="donutLegend">
+            <div class="legend-item">
+              <span class="legend-dot bypass"></span>
+              <span>Bypass Cases</span>
+              <span id="donutBypassLegend" class="legend-metric">0 (0.0%)</span>
+            </div>
+            <div class="legend-item">
+              <span class="legend-dot regular"></span>
+              <span>Regular Cases</span>
+              <span id="donutRegularLegend" class="legend-metric">0 (0.0%)</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- Visuals Grid: Row 4 (Executive Summary Matrix) -->
+    <div class="visuals-grid">
+      <section class="visual-card card-span-12">
+        <div class="visual-header">
+          <div class="visual-title-group">
+            <h3 id="matrixTitle">Executive Summary Matrix</h3>
+            <p id="matrixSubtitle">Volume and percentage breakdown</p>
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button id="tabMonthlyBtn" class="page-btn" style="background:#0078d4;color:#fff;">Monthly</button>
+            <button id="tabDailyBtn" class="page-btn">Daily (Each Day)</button>
+          </div>
+        </div>
+        <div class="table-responsive table-scroll-fixed">
+          <table class="matrix-table">
+            <thead id="matrixTableHead">
+              <tr>
+                <th>Month</th>
+                <th>Total Applications</th>
+                <th>Bypass Applications</th>
+                <th>Bypass %</th>
+              </tr>
+            </thead>
+            <tbody id="matrixTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+
+    <!-- Record-Level Drill-Down Explorer -->
+    <section class="visual-card card-span-12" style="margin-top:20px;">
+      <div class="visual-header">
+        <div class="visual-title-group">
+          <h3>Application Drill-Down Explorer</h3>
+          <p id="recordCount">Showing detailed records matching active slicers</p>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <input type="text" id="searchTable" placeholder="Search application, remarks, or user..." style="padding:6px 12px;border:1px solid var(--border-color);border-radius:var(--radius-sm);font-size:0.8rem;outline:none;width:240px;">
+          
+          <!-- Viewport Height Controls -->
+          <div class="view-toggle-group">
+            <button id="tblHeightCompact" class="toggle-btn" title="Compact Height (320px)">Compact</button>
+            <button id="tblHeightStandard" class="toggle-btn active" title="Standard Height (460px)">Standard</button>
+            <button id="tblHeightExpanded" class="toggle-btn" title="Expanded Height (650px)">Expanded</button>
+          </div>
+
+          <button id="btnScrollDrilldownTop" class="quick-jump-btn" title="Scroll to Top of Table" style="padding:4px 8px;font-size:0.75rem;">⬆ Top</button>
+          <span class="visual-tag" style="background:#eff6fc;color:#0078d4;font-weight:700;">Scrollable Explorer</span>
+        </div>
+      </div>
+      <div class="table-responsive drilldown-scroll-container" id="drilldownTableWrapper" style="max-height:460px;overflow-y:auto;overflow-x:auto;">
+        <table class="matrix-table">
+          <thead style="position:sticky;top:0;z-index:10;background:#f8fafc;">
+            <tr>
+              <th>Application No</th>
+              <th>Approval Date</th>
+              <th>Status</th>
+              <th>User ID</th>
+              <th>Assigned To</th>
+              <th>Bypass Flag</th>
+              <th>Remarks</th>
+            </tr>
+          </thead>
+          <tbody id="drilldownTableBody"></tbody>
+        </table>
+      </div>
+
+      <!-- Pagination for large 18,744 record files -->
+      <div class="pagination-bar">
+        <div id="paginationSummary">Showing 1 to 50 of 152 records</div>
+        <div class="pagination-controls">
+          <label style="font-size:0.75rem;margin-right:4px;">Rows per page:</label>
+          <select id="pageSizeSelect" style="padding:4px 8px;border:1px solid var(--border-color);border-radius:4px;font-size:0.75rem;margin-right:12px;background:#fff;">
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+            <option value="250">250</option>
+          </select>
+          <button id="firstPageBtn" class="page-btn">« First</button>
+          <button id="prevPageBtn" class="page-btn">‹ Prev</button>
+          <span id="pageIndicator" class="page-info">Page 1 of 4</span>
+          <button id="nextPageBtn" class="page-btn">Next ›</button>
+          <button id="lastPageBtn" class="page-btn">Last »</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Scripts -->
+  <script src="dashboard.js?v=2.3"></script>
+</body>
+</html>

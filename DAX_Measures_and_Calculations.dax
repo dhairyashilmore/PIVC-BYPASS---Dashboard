@@ -1,0 +1,228 @@
+/* ==============================================================================
+   POWER BI DAX FORMULAS & MODELING SCRIPT
+   PROJECT: PIVC Bypass Analysis Dashboard
+   TARGET TABLE NAME: 'PIVC_Data' (or your primary fact table name)
+   ============================================================================== */
+
+// ------------------------------------------------------------------------------
+// SECTION 1: CALCULATED COLUMNS (Add to table 'PIVC_Data')
+// ------------------------------------------------------------------------------
+
+/* 1.1: Bypass Flag (Dual-Condition Identification)
+   Business Rules for 'PIVC_bypass_500_records.csv':
+   - Condition 1: APPROVAL_SUBSTATUS contains "Except" (Matches "Exceptional" or "Exception")
+   - Condition 2: REMARKS contains "Bypass" (Matches "Bypass request-AS-...", "Bypass request", etc.)
+   - When APPROVAL_SUBSTATUS is "DPIVC DONE" or blank/null, evaluates cleanly to "Regular" (System Done).
+   Note: If your column in Power BI is named APPROVAL_STATUS, use 'PIVC_Data'[APPROVAL_STATUS] below. */
+Bypass Flag = 
+IF (
+    CONTAINSSTRING ( 'PIVC_Data'[APPROVAL_SUBSTATUS], "Except" )
+        || CONTAINSSTRING ( 'PIVC_Data'[REMARKS], "Bypass" ),
+    "Bypass",
+    "Regular"
+)
+
+/* 1.1b: PIVC Processing Mode / Channel (Helpful classification column)
+   Labels 'DPIVC DONE' as 'System Automated' and 'Exceptional' as 'Exception Bypass' */
+PIVC Processing Mode = 
+SWITCH (
+    TRUE (),
+    CONTAINSSTRING ( 'PIVC_Data'[APPROVAL_SUBSTATUS], "Except" ), "Exception Bypass",
+    CONTAINSSTRING ( 'PIVC_Data'[APPROVAL_SUBSTATUS], "DPIVC" ) 
+        || ISBLANK ( 'PIVC_Data'[APPROVAL_SUBSTATUS] ) 
+        || TRIM ( 'PIVC_Data'[APPROVAL_SUBSTATUS] ) = "", "System Done (Automated)",
+    'PIVC_Data'[APPROVAL_SUBSTATUS]
+)
+
+/* 1.2: Month-Year Display
+   Produces: "Jan 2024", "Feb 2024", etc. */
+Month-Year = 
+FORMAT ( 'PIVC_Data'[APPROVAL_DATE], "mmm yyyy" )
+
+/* 1.3: Month-Year Sort Key (REQUIRED FOR CHRONOLOGICAL SORTING)
+   Produces: 202401, 202402, etc.
+   CRITICAL STEP IN POWER BI DESKTOP:
+   1. Select column 'Month-Year' in Data View or Fields pane.
+   2. Go to "Column tools" tab on the ribbon.
+   3. Click "Sort by Column" and select 'Month-Year Sort'. */
+Month-Year Sort = 
+YEAR ( 'PIVC_Data'[APPROVAL_DATE] ) * 100 + MONTH ( 'PIVC_Data'[APPROVAL_DATE] )
+
+/* 1.4: Approval Year (Optional convenience column) */
+Approval Year = 
+YEAR ( 'PIVC_Data'[APPROVAL_DATE] )
+
+/* 1.5: Approval Month (Optional convenience column) */
+Approval Month = 
+MONTH ( 'PIVC_Data'[APPROVAL_DATE] )
+
+
+// ------------------------------------------------------------------------------
+// SECTION 2: ENTERPRISE DATE DIMENSION TABLE (Recommended Modeling Best Practice)
+// Modeling > New Table > Paste the code below
+// Connect Dim_Date[Date] (1) to PIVC_Data[APPROVAL_DATE] (*) in Model View.
+// ------------------------------------------------------------------------------
+
+Dim_Date = 
+VAR MinDate = MIN ( 'PIVC_Data'[APPROVAL_DATE] )
+VAR MaxDate = MAX ( 'PIVC_Data'[APPROVAL_DATE] )
+VAR StartDate = DATE ( YEAR ( MinDate ), 1, 1 )
+VAR EndDate = DATE ( YEAR ( MaxDate ), 12, 31 )
+RETURN
+    ADDCOLUMNS (
+        CALENDAR ( StartDate, EndDate ),
+        "Year", YEAR ( [Date] ),
+        "Month Number", MONTH ( [Date] ),
+        "Month Name", FORMAT ( [Date], "mmmm" ),
+        "Month Short", FORMAT ( [Date], "mmm" ),
+        "Month-Year", FORMAT ( [Date], "mmm yyyy" ),
+        "Month-Year Sort", YEAR ( [Date] ) * 100 + MONTH ( [Date] ),
+        "Quarter", "Q" & FORMAT ( [Date], "q" ),
+        "Quarter-Year", "Q" & FORMAT ( [Date], "q" ) & " " & YEAR ( [Date] ),
+        "Day of Week", FORMAT ( [Date], "dddd" ),
+        "Day Number", DAY ( [Date] )
+    )
+
+
+// ------------------------------------------------------------------------------
+// SECTION 3: CORE REQUIRED MEASURES
+// Create a separate Measure Table (e.g., '_Measures') or add directly to 'PIVC_Data'
+// ------------------------------------------------------------------------------
+
+/* 3.1: Total Applications
+   Distinct count of all applications submitted/processed. */
+Total Applications = 
+DISTINCTCOUNT ( 'PIVC_Data'[APPLICATION_NO] )
+
+/* 3.2: Total Bypass Applications
+   Distinct count of applications where Bypass Flag is "Bypass". */
+Total Bypass Applications = 
+CALCULATE (
+    DISTINCTCOUNT ( 'PIVC_Data'[APPLICATION_NO] ),
+    'PIVC_Data'[Bypass Flag] = "Bypass"
+)
+
+/* 3.3: Total Regular Applications (Non-Bypass)
+   Distinct count of applications where Bypass Flag is "Regular". */
+Total Regular Applications = 
+CALCULATE (
+    DISTINCTCOUNT ( 'PIVC_Data'[APPLICATION_NO] ),
+    'PIVC_Data'[Bypass Flag] = "Regular"
+)
+
+/* 3.4: Bypass Percentage
+   Ratio of Bypass Applications to Total Applications.
+   FORMAT: Set formatting to Percentage (0.0% or 0.00%) in Measure Tools ribbon. */
+Bypass Percentage = 
+DIVIDE (
+    [Total Bypass Applications],
+    [Total Applications],
+    0
+)
+
+/* 3.5: Regular Percentage */
+Regular Percentage = 
+DIVIDE (
+    [Total Regular Applications],
+    [Total Applications],
+    0
+)
+
+
+// ------------------------------------------------------------------------------
+// SECTION 4: ADVANCED EXECUTIVE & TIME-INTELLIGENCE MEASURES
+// ------------------------------------------------------------------------------
+
+/* 4.1: Bypass Applications Previous Month (MoM) */
+Bypass Applications PM = 
+CALCULATE (
+    [Total Bypass Applications],
+    DATEADD ( Dim_Date[Date], -1, MONTH )
+)
+
+/* 4.2: Month-over-Month Bypass Variance */
+Bypass MoM Change = 
+VAR CurrentMonthVal = [Total Bypass Applications]
+VAR PreviousMonthVal = [Bypass Applications PM]
+RETURN
+    IF (
+        ISBLANK ( PreviousMonthVal ),
+        BLANK (),
+        CurrentMonthVal - PreviousMonthVal
+    )
+
+/* 4.3: Month-over-Month Bypass Growth Percentage */
+Bypass MoM Growth % = 
+VAR CurrentMonthVal = [Total Bypass Applications]
+VAR PreviousMonthVal = [Bypass Applications PM]
+RETURN
+    DIVIDE ( CurrentMonthVal - PreviousMonthVal, PreviousMonthVal, BLANK () )
+
+/* 4.4: Approved Bypass Applications */
+Approved Bypass Count = 
+CALCULATE (
+    [Total Bypass Applications],
+    'PIVC_Data'[APPROVAL_STATUS] = "Approved"
+)
+
+/* 4.5: Bypass Approval Rate */
+Bypass Approval Rate = 
+DIVIDE (
+    [Approved Bypass Count],
+    [Total Bypass Applications],
+    0
+)
+
+/* 4.6: Dynamic Card Subtitle / Filter Status */
+Dashboard Subtitle = 
+"Reporting Period: " & 
+MIN ( 'PIVC_Data'[APPROVAL_DATE] ) & " to " & MAX ( 'PIVC_Data'[APPROVAL_DATE] ) &
+" | Active Filter: " & 
+IF ( ISFILTERED ( 'PIVC_Data'[ASSIGNED_TO] ), SELECTEDVALUE ( 'PIVC_Data'[ASSIGNED_TO] ), "All Assignees" )
+
+/* 4.7: Dynamic KPI Color Indicator (For Conditional Formatting of KPI Card or Table)
+   Red if Bypass % > 35%, Amber if > 25%, Green otherwise */
+KPI Alert Color = 
+VAR Pct = [Bypass Percentage]
+RETURN
+    SWITCH (
+        TRUE (),
+        Pct >= 0.35, "#D83B01",  -- Critical Alert Red
+        Pct >= 0.20, "#FF8C00",  -- Warning Amber
+        "#107C41"                -- Normal Green
+    )
+
+
+// ------------------------------------------------------------------------------
+// SECTION 5: DAILY BYPASS ANALYSIS MEASURES (How many bypass in each day)
+// ------------------------------------------------------------------------------
+
+/* 5.1: Daily Bypass Count
+   Distinct count of bypasses for any selected day/date in a chart, table, or matrix */
+Daily Bypass Count = 
+CALCULATE (
+    DISTINCTCOUNT ( 'PIVC_Data'[APPLICATION_NO] ),
+    'PIVC_Data'[Bypass Flag] = "Bypass"
+)
+
+/* 5.2: Average Daily Bypass Count across all active dates in context */
+Average Daily Bypass = 
+AVERAGEX (
+    VALUES ( 'PIVC_Data'[APPROVAL_DATE] ),
+    [Daily Bypass Count]
+)
+
+/* 5.3: Peak Daily Bypass Count */
+Peak Daily Bypass = 
+MAXX (
+    VALUES ( 'PIVC_Data'[APPROVAL_DATE] ),
+    [Daily Bypass Count]
+)
+
+/* 5.4: Daily Bypass Percentage */
+Daily Bypass Percentage = 
+DIVIDE (
+    [Daily Bypass Count],
+    DISTINCTCOUNT ( 'PIVC_Data'[APPLICATION_NO] ),
+    0
+)
