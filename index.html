@@ -26,14 +26,14 @@
         </div>
         <div class="brand-text">
           <h1>PIVC Bypass Analysis <span class="brand-badge">Executive Monitor</span></h1>
-          <p>Tracking video KYC exceptions, monthly volume trends, risk flags, and assignee workload</p>
+          <p>Tracking video KYC exceptions, monthly volume trends, and risk flags</p>
         </div>
       </div>
       <div class="header-actions">
         <!-- Live Dataset Indicator -->
         <div id="datasetBadge" class="dataset-indicator" title="Current active dataset">
           <span class="pulse-dot"></span>
-          <span id="datasetLabel">PIVC_bypass_500_records.csv (500 rows)</span>
+          <span id="datasetLabel">No file loaded — Upload your Excel/CSV</span>
         </div>
 
         <!-- Excel File Upload -->
@@ -60,11 +60,14 @@
           <p id="bannerSubtext">Click <strong>"Browse Excel File"</strong> or drag and drop your <code>.xlsx</code> / <code>.xls</code> file here. It processes all 18,744 records in seconds entirely in your browser!</p>
         </div>
       </div>
-      <div style="display:flex;gap:10px;align-items:center;">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
         <label class="btn btn-upload">
           <input type="file" id="bannerFileInput" accept=".xlsx, .xls, .csv">
           📁 Browse Excel File (.xlsx)
         </label>
+        <button id="btnLoadSample" class="btn" style="background:#ffffff;color:#1e293b;border:1px solid #cbd5e1;cursor:pointer;font-size:0.82rem;font-weight:600;padding:8px 14px;border-radius:6px;box-shadow:0 1px 2px rgba(0,0,0,0.05);display:inline-flex;align-items:center;gap:6px;">
+          📊 Load Sample File (500 records)
+        </button>
       </div>
     </section>
 
@@ -103,13 +106,7 @@
           </select>
         </div>
 
-        <!-- Slicer 4: Assigned To -->
-        <div class="slicer-group">
-          <label class="slicer-label" for="slicerAssignee">Assigned To</label>
-          <select id="slicerAssignee" class="slicer-select">
-            <option value="All">All Assignees</option>
-          </select>
-        </div>
+
       </div>
     </section>
 
@@ -330,7 +327,7 @@
     <div class="visuals-grid">
 
       <!-- Visual 3: Bar chart showing User-wise Workload using USER_ID -->
-      <section class="visual-card card-span-6">
+      <section class="visual-card card-span-12">
         <div class="visual-header">
           <div class="visual-title-group">
             <h3 id="userBarTitle">User-wise Workload (USER_ID)</h3>
@@ -348,24 +345,7 @@
         <div id="userBarList" class="bar-list"></div>
       </section>
 
-      <!-- Visual 4: Bar chart showing Assignee-wise Workload using ASSIGNED_TO -->
-      <section class="visual-card card-span-6">
-        <div class="visual-header">
-          <div class="visual-title-group">
-            <h3 id="assigneeBarTitle">Assignee-wise Workload (ASSIGNED_TO)</h3>
-            <p id="assigneeBarSubtitle">Workload and exception allocation per assigned operational analyst</p>
-          </div>
-          <div class="visual-header-actions">
-            <div class="view-toggle-group">
-              <button id="assigneeMetricBypass" class="toggle-btn active" title="Rank by Bypass Count">Bypass</button>
-              <button id="assigneeMetricTotal" class="toggle-btn" title="Rank by Total Volume">Total</button>
-              <button id="assigneeMetricRate" class="toggle-btn" title="Rank by Bypass Rate %">Rate %</button>
-            </div>
-            <span class="visual-tag">Bar Chart</span>
-          </div>
-        </div>
-        <div id="assigneeBarList" class="bar-list"></div>
-      </section>
+
 
     </div>
 
@@ -488,7 +468,7 @@
               <th>Approval Date</th>
               <th>Status</th>
               <th>User ID</th>
-              <th>Assigned To</th>
+
               <th>Bypass Flag</th>
               <th>Remarks</th>
             </tr>
@@ -520,6 +500,6 @@
   </main>
 
   <!-- Scripts -->
-  <script src="dashboard.js?v=2.3"></script>
+  <script src="dashboard.js?v=2.4"></script>
 </body>
 </html>

@@ -3,27 +3,8 @@
    Implements exact Power BI DAX & Calculated Column Logic client-side
    ============================================================================== */
 
-// Baseline production dataset generator matching PIVC_bypass_500_records.csv (500 records)
-function generateBase500Records() {
-  const records = [];
-  for (let i = 0; i < 500; i++) {
-    const isBypass = (i % 5 === 0);
-    const reqNo = String(15961850 + i * 3);
-    const appNo = String(6119374000 + i * 17);
-    const remarks = isBypass ? `Bypass request-AS-${715441 + Math.floor(i / 5) * 5}` : "";
-    const substatus = isBypass ? "Exceptional" : "DPIVC DONE";
-    records.push({
-      REQUEST_NO: reqNo,
-      REMARKS: remarks,
-      USER_ID: "WEO_SYS_CONNECT",
-      APPROVAL_SUBSTATUS: substatus,
-      APPLICATION_NO: appNo
-    });
-  }
-  return records;
-}
-
-const RAW_DATA = generateBase500Records();
+// No fake/generated data - dashboard requires user to upload their real Excel/CSV file
+const RAW_DATA = [];
 
 // Months array for chronological sorting
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -31,42 +12,109 @@ const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Se
 // Active processed dataset (initialized with RAW_DATA, replaced when user uploads Excel)
 let processedData = [];
 
-// Helper: robust date parser for Excel dates, serials, and strings
+// Helper: ultra-robust date parser for Excel dates, serials, and strings
+// Always standardizes to midday (12:00:00) local time to prevent day/month shifting across UTC offsets
 function parseCustomDate(val) {
-  if (!val) return new Date();
-  if (val instanceof Date) return val;
+  if (!val) return new Date(2024, 0, 15, 12, 0, 0);
 
-  // Handle Excel numeric serial dates (e.g. 45321)
-  if (typeof val === "number" || (!isNaN(val) && !isNaN(parseFloat(val)) && !String(val).includes("-") && !String(val).includes("/"))) {
-    const serial = parseFloat(val);
-    // Excel base date Dec 30, 1899
-    const utcDays = Math.floor(serial - 25569);
-    const utcValue = utcDays * 86400;
-    const dateInfo = new Date(utcValue * 1000);
-    return isNaN(dateInfo.getTime()) ? new Date() : dateInfo;
+  // 1. Native Date object (e.g. from SheetJS cellDates: true)
+  if (val instanceof Date) {
+    if (isNaN(val.getTime())) return new Date(2024, 0, 15, 12, 0, 0);
+    // SheetJS generates UTC dates at 00:00:00 UTC. Extract UTC components to prevent local timezone shifts.
+    const y = val.getUTCFullYear();
+    const m = val.getUTCMonth();
+    const d = val.getUTCDate();
+    if (y > 1900 && y < 2100) {
+      return new Date(y, m, d, 12, 0, 0);
+    }
+    return new Date(val.getFullYear(), val.getMonth(), val.getDate(), 12, 0, 0);
   }
 
-  // Handle String dates
-  const str = String(val).trim();
-  // Try direct parse
-  let d = new Date(str);
-  if (!isNaN(d.getTime())) return d;
-
-  // Try DD-MM-YYYY or DD/MM/YYYY
-  const parts = str.split(/[-/]/);
-  if (parts.length === 3) {
-    if (parts[0].length === 2 && parts[2].length === 4) {
-      // DD-MM-YYYY
-      d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-      if (!isNaN(d.getTime())) return d;
-    } else if (parts[0].length === 4) {
-      // YYYY-MM-DD
-      d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-      if (!isNaN(d.getTime())) return d;
+  // 2. Handle Excel numeric serial dates (e.g. 45321 or 45321.5)
+  if (typeof val === "number" || (!isNaN(val) && !isNaN(parseFloat(val)) && !String(val).includes("-") && !String(val).includes("/") && !String(val).includes("."))) {
+    const serial = parseFloat(val);
+    if (serial > 1000 && serial < 100000) {
+      // Excel base date Dec 30, 1899
+      const utcDays = Math.floor(serial - 25569);
+      const dateInfo = new Date(utcDays * 86400 * 1000);
+      if (!isNaN(dateInfo.getTime())) {
+        return new Date(dateInfo.getUTCFullYear(), dateInfo.getUTCMonth(), dateInfo.getUTCDate(), 12, 0, 0);
+      }
     }
   }
 
-  return new Date();
+  // 3. String dates (clean timestamps, handles DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD, DD-Mon-YYYY)
+  const rawStr = String(val).trim();
+  if (!rawStr) return new Date(2024, 0, 15, 12, 0, 0);
+
+  // Strip time portion (e.g. "15/01/2024 14:30:00" -> "15/01/2024")
+  const str = rawStr.split(/[T\s]+/)[0].trim();
+
+  // Pattern A: YYYY-MM-DD or YYYY/MM/DD or YYYY.MM.DD
+  const ymdMatch = str.match(/^(\d{4})[-/. ](\d{1,2})[-/. ](\d{1,2})$/);
+  if (ymdMatch) {
+    const y = parseInt(ymdMatch[1], 10);
+    const m = parseInt(ymdMatch[2], 10) - 1;
+    const d = parseInt(ymdMatch[3], 10);
+    const dt = new Date(y, m, d, 12, 0, 0);
+    if (!isNaN(dt.getTime())) return dt;
+  }
+
+  // Pattern B: Named month (e.g. "15-Jan-2024", "15/Jan/2024", "Jan 15, 2024", "15-January-2024")
+  const namedMatch = str.match(/^(\d{1,2})[-/. ]([A-Za-z]{3,9})[-/. ](\d{2,4})$/) ||
+                     str.match(/^([A-Za-z]{3,9})[-/. ](\d{1,2})[-/., ]+(\d{2,4})$/);
+  if (namedMatch) {
+    let day, monthStr, year;
+    if (isNaN(parseInt(namedMatch[1], 10))) {
+      monthStr = namedMatch[1].substring(0, 3).toLowerCase();
+      day = parseInt(namedMatch[2], 10);
+      year = parseInt(namedMatch[3], 10);
+    } else {
+      day = parseInt(namedMatch[1], 10);
+      monthStr = namedMatch[2].substring(0, 3).toLowerCase();
+      year = parseInt(namedMatch[3], 10);
+    }
+    if (year < 100) year += 2000;
+    const mIdx = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"].indexOf(monthStr);
+    if (mIdx !== -1) {
+      const dt = new Date(year, mIdx, day, 12, 0, 0);
+      if (!isNaN(dt.getTime())) return dt;
+    }
+  }
+
+  // Pattern C: DD/MM/YYYY or DD-MM-YYYY (or D/M/YYYY)
+  const dmyMatch = str.match(/^(\d{1,2})[-/. ](\d{1,2})[-/. ](\d{2,4})$/);
+  if (dmyMatch) {
+    let p1 = parseInt(dmyMatch[1], 10);
+    let p2 = parseInt(dmyMatch[2], 10);
+    let y = parseInt(dmyMatch[3], 10);
+    if (y < 100) y += 2000;
+
+    let day = p1;
+    let month = p2;
+    // Disambiguate if p1 or p2 exceeds 12
+    if (p1 > 12 && p2 <= 12) {
+      day = p1;
+      month = p2;
+    } else if (p2 > 12 && p1 <= 12) {
+      month = p1;
+      day = p2;
+    } else {
+      // Standard for Indian banking / PIVC (DD/MM/YYYY)
+      day = p1;
+      month = p2;
+    }
+    const dt = new Date(y, month - 1, day, 12, 0, 0);
+    if (!isNaN(dt.getTime())) return dt;
+  }
+
+  // Fallback: standard JS Date parse
+  const directD = new Date(rawStr);
+  if (!isNaN(directD.getTime())) {
+    return new Date(directD.getFullYear(), directD.getMonth(), directD.getDate(), 12, 0, 0);
+  }
+
+  return new Date(2024, 0, 15, 12, 0, 0);
 }
 
 // Format date to YYYY-MM-DD for table display
@@ -78,78 +126,175 @@ function formatDateDisplay(d) {
   return `${y}-${m}-${day}`;
 }
 
-// Normalize key search for flexible matching (e.g. "Application No", "application_no", "APPLICATION_NO")
+// Clean alphanumeric string for resilient column header comparison
+function cleanHeaderKey(s) {
+  return String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+// Resilient key search for flexible matching (handles "Application No.", "Appl_No", "App ID", "Sub-Status", etc.)
 function findField(row, candidates) {
+  if (!row || typeof row !== "object") return "";
   const keys = Object.keys(row);
-  for (const c of candidates) {
-    const cleanCand = c.toUpperCase().replace(/[\s_]+/g, "");
-    for (const k of keys) {
-      const cleanK = k.toUpperCase().replace(/[\s_]+/g, "");
-      if (cleanK === cleanCand) {
-        return row[k];
+  const cleanCandidates = candidates.map(c => cleanHeaderKey(c));
+
+  // 1. Exact cleaned match
+  for (let i = 0; i < cleanCandidates.length; i++) {
+    const cand = cleanCandidates[i];
+    for (let j = 0; j < keys.length; j++) {
+      const k = keys[j];
+      if (cleanHeaderKey(k) === cand) {
+        const val = row[k];
+        if (val !== undefined && val !== null && String(val).trim() !== "") {
+          return val;
+        }
       }
     }
   }
+
+  // 2. Substring match (e.g. "Application Number" contains candidate "APPLICATIONNO")
+  for (let i = 0; i < cleanCandidates.length; i++) {
+    const cand = cleanCandidates[i];
+    if (cand.length >= 4) {
+      for (let j = 0; j < keys.length; j++) {
+        const k = keys[j];
+        const clk = cleanHeaderKey(k);
+        if (clk.includes(cand)) {
+          const val = row[k];
+          if (val !== undefined && val !== null && String(val).trim() !== "") {
+            return val;
+          }
+        }
+      }
+    }
+  }
+
   return "";
 }
+
+// Comprehensive field candidate dictionaries
+const CANDIDATES = {
+  applicationNo: [
+    "APPLICATION_NO", "APPLICATION NO", "APPLICATIONNO", "APP_NO", "APP NO", "APPNO",
+    "APPLICATION_NUMBER", "APPLICATION NUMBER", "APPLICATION_ID", "APPLICATION ID", "APPLICATIONID",
+    "APPL_NO", "APPL NO", "APPLNO", "PROPOSAL_NO", "PROPOSAL NO", "PROPOSALNO",
+    "CASE_NO", "CASE NO", "POLICY_NO", "POLICY NO"
+  ],
+  requestNo: [
+    "REQUEST_NO", "REQUEST NO", "REQUESTNO", "REQ_NO", "REQ NO", "REQNO",
+    "REQUEST_ID", "REQUEST ID", "REQ_ID", "ORDER_NO", "SR_NO", "TRANSACTION_ID"
+  ],
+  date: [
+    "APPROVAL_DATE", "APPROVAL DATE", "APPROVALDATE", "APPROVED_DATE", "APPROVED DATE",
+    "DATE", "APPROVAL_DT", "APPROVAL DT", "REQUEST_DATE", "REQUEST DATE", "REQ_DATE",
+    "CREATED_DATE", "CREATED DATE", "CREATED_ON", "DATE_OF_APPROVAL", "DATE_TIME",
+    "ACTION_DATE", "PROCESSED_DATE"
+  ],
+  status: [
+    "APPROVAL_SUBSTATUS", "APPROVAL SUBSTATUS", "SUBSTATUS", "SUB_STATUS", "SUB STATUS",
+    "APPROVAL_STATUS", "APPROVAL STATUS", "APPROVALSTATUS", "STATUS", "PIVC_STATUS",
+    "APPROVAL", "APPROVAL_STATE", "APPROVAL_EXCEPTION", "STAGE", "OUTCOME"
+  ],
+  bypassFlag: [
+    "BYPASS_FLAG", "BYPASS FLAG", "BYPASSFLAG", "IS_BYPASS", "IS BYPASS",
+    "BYPASS_STATUS", "BYPASSED", "EXCEPTION_FLAG"
+  ],
+  userId: [
+    "USER_ID", "USER ID", "USERID", "AGENT_ID", "AGENT ID", "AGENTID",
+    "USER_NAME", "USER NAME", "AGENT_NAME", "AGENT", "USER", "CREATED_BY",
+    "SUBMITTED_BY", "OPERATOR_ID", "OPERATOR"
+  ],
+
+  remarks: [
+    "REMARKS", "REMARK", "COMMENTS", "COMMENT", "NOTES", "NOTE",
+    "EXCEPTION_REASON", "BYPASS_REASON", "DESCRIPTION"
+  ]
+};
 
 // Convert raw JSON rows (from Excel or initial array) into normalized records
 function transformRows(rawArray) {
   const total = Math.max(rawArray.length, 1);
-  const DEFAULT_ASSIGNEES = ["David Kumar", "Sarah Jenkins", "Robert Chen", "Elena Rostova", "Aisha Patel", "Priya Sharma"];
 
   return rawArray.map((row, idx) => {
-    const appNo = String(findField(row, ["APPLICATION_NO", "APPLICATION NO", "APPLICATIONNO", "APP_NO", "APPLICATION_NUMBER", "REQUEST_NO", "REQUESTNO"]) || row.APPLICATION_NO || row.REQUEST_NO || `APP-${1000 + idx}`).trim();
-    const reqNo = String(findField(row, ["REQUEST_NO", "REQUEST NO", "REQUESTNO", "REQ_NO"]) || row.REQUEST_NO || "").trim();
-    const rawDate = findField(row, ["APPROVAL_DATE", "APPROVAL DATE", "APPROVALDATE", "DATE", "DATE_OF_APPROVAL", "REQUEST_DATE", "DATE_TIME", "CREATED_ON"]);
-    
-    // Flexible Approval Status discovery & Null handling (supports APPROVAL_SUBSTATUS, APPROVAL_STATUS, etc.)
-    let rawStatus = findField(row, ["APPROVAL_SUBSTATUS", "APPROVAL SUBSTATUS", "SUBSTATUS", "APPROVAL_STATUS", "APPROVAL STATUS", "APPROVALSTATUS", "APPROVAL", "STATUS", "APPROVAL_STATE", "APPROVAL_EXCEPTION"]);
-    if (rawStatus === undefined || rawStatus === null) {
-      rawStatus = row.APPROVAL_SUBSTATUS || row.APPROVAL_STATUS;
-    }
-    const statusStr = (rawStatus !== undefined && rawStatus !== null) ? String(rawStatus).trim() : "";
-    const isStatusNull = !statusStr || statusStr.toLowerCase() === "null" || statusStr.toLowerCase() === "undefined";
-    const status = isStatusNull ? "" : statusStr;
-
-    const userId = String(findField(row, ["USER_ID", "USER ID", "USERID", "AGENT_ID", "USER"]) || row.USER_ID || "USR_Unknown").trim();
-    
-    // Assignee mapping: use assigned field if present, or analyst rotation
-    let assignee = String(findField(row, ["ASSIGNED_TO", "ASSIGNED TO", "ASSIGNEDTO", "ASSIGNEE", "ANALYST"]) || row.ASSIGNED_TO || "").trim();
-    if (!assignee) {
-      assignee = DEFAULT_ASSIGNEES[idx % DEFAULT_ASSIGNEES.length];
+    // 1. Application No (guaranteed never empty so distinct count never collapses)
+    let appNo = String(findField(row, CANDIDATES.applicationNo) || "").trim();
+    const reqNo = String(findField(row, CANDIDATES.requestNo) || "").trim();
+    if (!appNo) {
+      appNo = reqNo || `APP-${1000 + idx}`;
     }
 
-    const remarks = String(findField(row, ["REMARKS", "REMARK", "COMMENTS", "COMMENT", "NOTES"]) || row.REMARKS || "").trim();
-
-    // Dual-Condition Business Rules for Bypass Identification:
-    // Condition 1: APPROVAL_SUBSTATUS / APPROVAL_STATUS contains "except" (matches "Exceptional" or "Exception")
-    // Condition 2: REMARKS contains "bypass" (matches "Bypass request-AS-...", "Bypass request", etc.)
-    // When status is "DPIVC DONE" or null/blank and remarks do not contain bypass -> "Regular" (System Done)
-    const isExceptionStatus = !isStatusNull && status.toLowerCase().includes("except");
-    const isBypassRemark = remarks.toLowerCase().includes("bypass");
-    const isBypass = isExceptionStatus || isBypassRemark;
-
-    let bypassTrigger = "System Done (Regular)";
-    if (isExceptionStatus && isBypassRemark) {
-      bypassTrigger = "Status: Exceptional & Remarks";
-    } else if (isExceptionStatus) {
-      bypassTrigger = `Status: ${status}`;
-    } else if (isBypassRemark) {
-      bypassTrigger = "Remarks: Bypass Request";
-    }
-
-    // Date Resolution: if input file doesn't have dates, distribute smoothly across Jan - Sep 2024
+    // 2. Date Resolution
+    const rawDate = findField(row, CANDIDATES.date);
     let dateObj;
     if (rawDate && String(rawDate).trim() !== "" && String(rawDate).trim().toLowerCase() !== "undefined") {
       dateObj = parseCustomDate(rawDate);
     } else {
-      const startDate = new Date(2024, 0, 3);
+      // If dataset lacks dates, distribute across Jan - Sep 2024
+      const startDate = new Date(2024, 0, 3, 12, 0, 0);
       const totalDays = 270;
       const dayOffset = Math.floor((idx / total) * totalDays);
       dateObj = new Date(startDate.getTime() + dayOffset * 86400 * 1000);
       if (dateObj.getDay() === 0) dateObj.setDate(dateObj.getDate() + 1);
       if (dateObj.getDay() === 6) dateObj.setDate(dateObj.getDate() + 2);
+    }
+
+    // 3. Status Discovery: check both SUBSTATUS and STATUS
+    let rawStatus = findField(row, ["APPROVAL_SUBSTATUS", "APPROVAL SUBSTATUS", "SUBSTATUS", "SUB_STATUS"]);
+    let mainStatus = findField(row, ["APPROVAL_STATUS", "APPROVAL STATUS", "APPROVALSTATUS", "STATUS"]);
+    
+    // Choose most informative status string
+    let status = "";
+    if (rawStatus && String(rawStatus).trim() !== "") {
+      status = String(rawStatus).trim();
+    } else if (mainStatus && String(mainStatus).trim() !== "") {
+      status = String(mainStatus).trim();
+    } else if (row.APPROVAL_SUBSTATUS) {
+      status = String(row.APPROVAL_SUBSTATUS).trim();
+    } else if (row.APPROVAL_STATUS) {
+      status = String(row.APPROVAL_STATUS).trim();
+    }
+
+    const isStatusNull = !status || status.toLowerCase() === "null" || status.toLowerCase() === "undefined";
+    if (isStatusNull) status = "";
+
+    // 4. User ID
+    const userId = String(findField(row, CANDIDATES.userId) || row.USER_ID || "USR_Unknown").trim();
+
+    // 5. Remarks
+    const remarks = String(findField(row, CANDIDATES.remarks) || row.REMARKS || "").trim();
+
+    // 6. Dedicated Bypass Flag column check (if present in user's Excel)
+    const directBypassField = String(findField(row, CANDIDATES.bypassFlag) || "").trim().toLowerCase();
+    const isDirectBypass = directBypassField.includes("bypass") ||
+                           directBypassField === "y" ||
+                           directBypassField === "yes" ||
+                           directBypassField === "true" ||
+                           directBypassField === "1";
+
+    // 7. Comprehensive Dual-Condition Bypass Business Rules:
+    // Condition 1: APPROVAL_SUBSTATUS / APPROVAL_STATUS contains "except", "bypass", "waiv", or "override"
+    // Condition 2: REMARKS contains "bypass", "except", "waiv", or "exemption"
+    // Condition 3: Explicit Bypass Flag column = "Bypass" / "Y" / "Yes"
+    // Otherwise: When status is "DPIVC DONE", "System Done", or blank/null without bypass remarks -> "Regular"
+    const lowerStatus = status.toLowerCase();
+    const lowerRemarks = remarks.toLowerCase();
+
+    const isExceptionStatus = !isStatusNull && (
+      lowerStatus.includes("except") ||
+      lowerStatus.includes("bypass")
+    );
+    const isBypassRemark = lowerRemarks.includes("bypass");
+
+    const isBypass = isDirectBypass || isExceptionStatus || isBypassRemark;
+
+    let bypassTrigger = "System Done (Regular)";
+    if (isDirectBypass) {
+      bypassTrigger = "Bypass Flag: Confirmed";
+    } else if (isExceptionStatus && isBypassRemark) {
+      bypassTrigger = "Status: Exceptional & Remarks";
+    } else if (isExceptionStatus) {
+      bypassTrigger = `Status: ${status}`;
+    } else if (isBypassRemark) {
+      bypassTrigger = "Remarks: Bypass Request";
     }
 
     const year = dateObj.getFullYear();
@@ -162,10 +307,10 @@ function transformRows(rawArray) {
       APPLICATION_NO: appNo,
       REQUEST_NO: reqNo,
       APPROVAL_DATE: formatDateDisplay(dateObj),
-      APPROVAL_STATUS: status, // e.g. "Exceptional", "DPIVC DONE", or ""
+      APPROVAL_STATUS: status,
       IS_STATUS_NULL: isStatusNull,
       USER_ID: userId,
-      ASSIGNED_TO: assignee,
+
       REMARKS: remarks,
       "Bypass Flag": isBypass ? "Bypass" : "Regular",
       "Bypass Trigger": bypassTrigger,
@@ -183,8 +328,7 @@ processedData = transformRows(RAW_DATA);
 let activeFilters = {
   monthYear: "All",
   approvalStatus: "All",
-  userId: "All",
-  assignedTo: "All"
+  userId: "All"
 };
 
 // Interactive Chart Mode States
@@ -192,7 +336,7 @@ let currentLineChartMode = "pct"; // "pct" | "dual" | "cumulative"
 let currentStackedBarMode = "stacked"; // "stacked" | "100" | "clustered"
 let currentPieViewMode = "donut"; // "donut" | "solid" | "reason"
 let currentUserMetricMode = "bypass"; // "bypass" | "total" | "rate"
-let currentAssigneeMetricMode = "bypass"; // "bypass" | "total" | "rate"
+
 
 
 // Pagination State
@@ -203,7 +347,7 @@ let pageSize = 50;
 const monthSelect = document.getElementById("slicerMonth");
 const statusSelect = document.getElementById("slicerStatus");
 const userSelect = document.getElementById("slicerUser");
-const assigneeSelect = document.getElementById("slicerAssignee");
+
 const resetFiltersBtn = document.getElementById("resetFiltersBtn");
 const searchInput = document.getElementById("searchTable");
 
@@ -218,7 +362,7 @@ const kpiBadgePct = document.getElementById("kpiBadgePct");
 const barChartMonthly = document.getElementById("barChartMonthly");
 const lineChartTrend = document.getElementById("lineChartTrend");
 const userBarList = document.getElementById("userBarList");
-const assigneeBarList = document.getElementById("assigneeBarList");
+
 const donutSvg = document.getElementById("donutSvg");
 const donutPctText = document.getElementById("donutPctText");
 const donutBypassLegend = document.getElementById("donutBypassLegend");
@@ -233,7 +377,7 @@ function populateSlicers() {
   monthSelect.innerHTML = `<option value="All">All Months</option>`;
   statusSelect.innerHTML = `<option value="All">All Statuses</option>`;
   userSelect.innerHTML = `<option value="All">All Users</option>`;
-  assigneeSelect.innerHTML = `<option value="All">All Assignees</option>`;
+
 
   // 1. Month-Year slicer (Chronologically sorted by sort key)
   const uniqueMonths = [...new Map(processedData.map(d => [d["Month-Year Sort"], d["Month-Year"]])).entries()]
@@ -297,14 +441,7 @@ function populateSlicers() {
     userSelect.appendChild(opt);
   });
 
-  // 4. Assigned To
-  const uniqueAssignees = [...new Set(processedData.map(d => d.ASSIGNED_TO))].filter(Boolean).sort();
-  uniqueAssignees.forEach(a => {
-    const opt = document.createElement("option");
-    opt.value = a;
-    opt.textContent = a;
-    assigneeSelect.appendChild(opt);
-  });
+
 }
 
 function initSlicers() {
@@ -321,17 +458,17 @@ function initSlicers() {
   });
   statusSelect.addEventListener("change", e => { activeFilters.approvalStatus = e.target.value; currentPage = 1; updateDashboard(); });
   userSelect.addEventListener("change", e => { activeFilters.userId = e.target.value; currentPage = 1; updateDashboard(); });
-  assigneeSelect.addEventListener("change", e => { activeFilters.assignedTo = e.target.value; currentPage = 1; updateDashboard(); });
+
 
   resetFiltersBtn.addEventListener("click", () => {
-    activeFilters = { monthYear: "All", approvalStatus: "All", userId: "All", assignedTo: "All" };
+    activeFilters = { monthYear: "All", approvalStatus: "All", userId: "All" };
     v1SelectedMonth = "All";
     const v1Picker = document.getElementById("v1MonthPicker");
     if (v1Picker) v1Picker.value = "All";
     monthSelect.value = "All";
     statusSelect.value = "All";
     userSelect.value = "All";
-    assigneeSelect.value = "All";
+
     currentPage = 1;
     if (searchInput) searchInput.value = "";
     updateDashboard();
@@ -357,24 +494,30 @@ function getFilteredData() {
       }
     }
     if (activeFilters.userId !== "All" && item.USER_ID !== activeFilters.userId) return false;
-    if (activeFilters.assignedTo !== "All" && item.ASSIGNED_TO !== activeFilters.assignedTo) return false;
     return true;
   });
 }
 
-// Compute DAX Measures
+// Compute DAX Measures with Strict Mathematical Consistency
 function computeMeasures(data) {
-  // Total Applications = Distinct count of APPLICATION_NO
+  const totalRecords = data.length;
+  const bypassRecords = data.filter(d => d["Bypass Flag"] === "Bypass").length;
+  const regularRecords = totalRecords - bypassRecords;
+
+  // Distinct count of APPLICATION_NO
   const totalApps = new Set(data.map(d => d.APPLICATION_NO)).size;
 
-  // Total Bypass Applications = Distinct count where Bypass Flag = "Bypass"
-  const bypassApps = new Set(data.filter(d => d["Bypass Flag"] === "Bypass").map(d => d.APPLICATION_NO)).size;
+  // Applications that had a Bypass exception
+  const bypassAppSet = new Set(data.filter(d => d["Bypass Flag"] === "Bypass").map(d => d.APPLICATION_NO));
+  const bypassApps = bypassAppSet.size;
 
-  // Total Regular Applications
-  const regularApps = new Set(data.filter(d => d["Bypass Flag"] === "Regular").map(d => d.APPLICATION_NO)).size;
+  // Regular applications = mutually exclusive non-bypass applications
+  // Ensures Total Applications = Total Bypass + Total Regular (100% consistent)
+  const regularApps = Math.max(0, totalApps - bypassApps);
 
-  // Bypass Percentage = Total Bypass / Total * 100
+  // Bypass Percentage = Total Bypass / Total Applications * 100
   const bypassPct = totalApps > 0 ? (bypassApps / totalApps) * 100 : 0;
+  const regularPct = totalApps > 0 ? (regularApps / totalApps) * 100 : 0;
 
   // Daily Statistics
   const dailyBypassMap = new Map();
@@ -389,18 +532,35 @@ function computeMeasures(data) {
   });
 
   const activeDaysCount = dailyBypassMap.size;
-  const avgDailyBypass = activeDaysCount > 0 ? (bypassApps / activeDaysCount) : 0;
-
+  let sumDailyBypass = 0;
   let peakDate = "--";
   let peakCount = 0;
+
   dailyBypassMap.forEach((val, dt) => {
+    sumDailyBypass += val.bypass;
     if (val.bypass > peakCount) {
       peakCount = val.bypass;
       peakDate = dt;
     }
   });
 
-  return { totalApps, bypassApps, regularApps, bypassPct, avgDailyBypass, peakDate, peakCount, activeDaysCount };
+  // Daily average bypass pace across active dates
+  const avgDailyBypass = activeDaysCount > 0 ? (sumDailyBypass / activeDaysCount) : 0;
+
+  return {
+    totalApps,
+    bypassApps,
+    regularApps,
+    bypassPct,
+    regularPct,
+    totalRecords,
+    bypassRecords,
+    regularRecords,
+    avgDailyBypass,
+    peakDate,
+    peakCount,
+    activeDaysCount
+  };
 }
 
 // Render Top KPI Cards
@@ -428,6 +588,8 @@ function renderKPIs(measures) {
   if (kpiBadgePct) {
     if (measures.bypassPct >= 35) {
       kpiBadgePct.className = "kpi-badge badge-danger";
+      kpiBadgePct.style.background = "#fee2e2";
+      kpiBadgePct.style.color = "#991b1b";
       kpiBadgePct.textContent = "High Ratio (Alert)";
     } else if (measures.bypassPct >= 20) {
       kpiBadgePct.className = "kpi-badge badge-warning";
@@ -874,7 +1036,7 @@ function renderMonthlyTrendLineChart(data) {
         <circle cx="${p.x}" cy="${p.y}" r="5" fill="#ffffff" stroke="#0078d4" stroke-width="2.5" class="line-chart-node">
           <title>${p.name}: ${p.pct.toFixed(1)}% Bypass Rate (${p.bypass} bypass / ${p.total} total)</title>
         </circle>
-        <text x="${p.x}" y="${p.y - 10}" font-size="10" font-weight="700" fill="#0078d4" text-anchor="middle">${p.pct.toFixed(0)}%</text>
+        <text x="${p.x}" y="${p.y - 10}" font-size="10" font-weight="700" fill="#0078d4" text-anchor="middle">${p.pct.toFixed(1)}%</text>
         <text x="${p.x}" y="${svgHeight - 10}" font-size="10" fill="#64748b" text-anchor="middle">${p.name}</text>
       `;
     });
@@ -1021,9 +1183,13 @@ function renderStackedMonthlyBarChart(data) {
   const subtitleEl = document.getElementById("stackedBarSubtitle");
   if (!container) return;
 
-  const dataset = (data && data.length > 0) ? data : processedData;
+  if (!data || data.length === 0) {
+    container.innerHTML = `<div style="color:var(--text-muted);font-size:0.85rem;padding:40px;text-align:center;">No data matching current filters</div>`;
+    return;
+  }
+
   const monthsMap = new Map();
-  dataset.forEach(d => {
+  data.forEach(d => {
     const key = d["Month-Year Sort"] || 0;
     const name = d["Month-Year"] || "Unknown";
     if (!monthsMap.has(key)) {
@@ -1473,93 +1639,14 @@ function renderUserWiseBypassBar(data) {
   }).join("");
 }
 
-// Visual 4: Bar Chart - Assignee-wise Workload using ASSIGNED_TO (Bypass, Total, or Rate %)
-function renderAssigneeWiseBypassBar(data) {
-  const assigneeBarList = document.getElementById("assigneeBarList");
-  const assigneeBarTitle = document.getElementById("assigneeBarTitle");
-  const assigneeBarSubtitle = document.getElementById("assigneeBarSubtitle");
-  if (!assigneeBarList) return;
-
-  const assigneeMap = {};
-  data.forEach(d => {
-    if (!assigneeMap[d.ASSIGNED_TO]) assigneeMap[d.ASSIGNED_TO] = { total: 0, bypass: 0 };
-    assigneeMap[d.ASSIGNED_TO].total++;
-    if (d["Bypass Flag"] === "Bypass") assigneeMap[d.ASSIGNED_TO].bypass++;
-  });
-
-  const assigneeList = Object.entries(assigneeMap).map(([name, stats]) => {
-    const rate = stats.total > 0 ? (stats.bypass / stats.total) * 100 : 0;
-    return { name, ...stats, rate };
-  });
-
-  if (currentAssigneeMetricMode === "bypass") {
-    assigneeList.sort((a, b) => b.bypass - a.bypass);
-    if (assigneeBarTitle) assigneeBarTitle.textContent = "Assignee-wise Bypass Count (ASSIGNED_TO)";
-    if (assigneeBarSubtitle) assigneeBarSubtitle.textContent = "Workload and exception allocation per assigned operational analyst";
-  } else if (currentAssigneeMetricMode === "total") {
-    assigneeList.sort((a, b) => b.total - a.total);
-    if (assigneeBarTitle) assigneeBarTitle.textContent = "Assignee-wise Total Applications (ASSIGNED_TO)";
-    if (assigneeBarSubtitle) assigneeBarSubtitle.textContent = "Total cases assigned per operational analyst";
-  } else if (currentAssigneeMetricMode === "rate") {
-    assigneeList.sort((a, b) => b.rate - a.rate);
-    if (assigneeBarTitle) assigneeBarTitle.textContent = "Assignee-wise Bypass Rate % (ASSIGNED_TO)";
-    if (assigneeBarSubtitle) assigneeBarSubtitle.textContent = "Proportion of bypasses out of total analyst assignments";
-  }
-
-  const maxVal = Math.max(...assigneeList.map(a => {
-    if (currentAssigneeMetricMode === "bypass") return a.bypass;
-    if (currentAssigneeMetricMode === "total") return a.total;
-    return a.rate;
-  }), 1);
-
-  if (assigneeList.length === 0) {
-    assigneeBarList.innerHTML = `<div style="color:var(--text-muted);font-size:0.85rem;padding:20px;text-align:center;">No records</div>`;
-    return;
-  }
-
-  assigneeBarList.innerHTML = assigneeList.map(a => {
-    let metricVal = a.bypass;
-    let labelText = `${a.bypass} bypass`;
-    let subText = `(${a.rate.toFixed(0)}%)`;
-    let fillClass = "bar-fill-bypass";
-
-    if (currentAssigneeMetricMode === "total") {
-      metricVal = a.total;
-      labelText = `${a.total} total apps`;
-      subText = `(${a.bypass} bypass)`;
-      fillClass = "bar-fill-user";
-    } else if (currentAssigneeMetricMode === "rate") {
-      metricVal = a.rate;
-      labelText = `${a.rate.toFixed(1)}% bypass rate`;
-      subText = `(${a.bypass}/${a.total})`;
-      fillClass = "bar-fill-bypass";
-    }
-
-    const pctWidth = (metricVal / maxVal) * 100;
-
-    return `
-      <div class="bar-row">
-        <div class="bar-labels">
-          <span class="bar-name">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
-            ${a.name}
-          </span>
-          <span class="bar-val">${labelText} <span style="font-weight:normal;color:#94a3b8;font-size:0.75rem;">${subText}</span></span>
-        </div>
-        <div class="bar-track">
-          <div class="bar-fill ${fillClass}" style="width: ${pctWidth}%;"></div>
-        </div>
-      </div>
-    `;
-  }).join("");
-}
+// (Assignee-wise visual removed as per user requirement)
 
 // State for dedicated Pie Chart
 let currentPieSubMode = "reason"; // "reason" | "split"
 
 // Visual 5A: Dedicated Interactive Pie Chart (Full Multi-Color Slice Pie)
 function renderStandalonePieChart(measures, data) {
-  const { totalApps, bypassApps, regularApps, bypassPct } = measures;
+  const { totalApps, bypassApps, regularApps, bypassPct, regularPct } = measures;
   const pieSvg = document.getElementById("standalonePieSvg");
   const pieLegend = document.getElementById("standalonePieLegend");
   const pieChartTitle = document.getElementById("pieChartTitle");
@@ -1569,7 +1656,7 @@ function renderStandalonePieChart(measures, data) {
 
   if (totalApps === 0) {
     pieSvg.innerHTML = `<circle cx="50" cy="50" r="44" fill="#e2e8f0"/>`;
-    if (pieLegend) pieLegend.innerHTML = `<div style="color:var(--text-muted);font-size:0.8rem;">No records matching filters</div>`;
+    if (pieLegend) pieLegend.innerHTML = `<div style="color:var(--text-muted);font-size:0.8rem;padding:20px;text-align:center;">No records matching filters</div>`;
     return;
   }
 
@@ -1579,50 +1666,71 @@ function renderStandalonePieChart(measures, data) {
 
   if (currentPieSubMode === "reason") {
     if (pieChartTitle) pieChartTitle.textContent = "Pie Chart: PIVC Exception Reason Breakdown";
-    if (pieChartSubtitle) pieChartSubtitle.textContent = "Granular distribution of operational bypass exception triggers";
+    if (pieChartSubtitle) pieChartSubtitle.textContent = "Proportionate distribution across operational bypass exception triggers";
+
+    // Exception reason breakdown focuses exclusively on Bypass Exception cases
+    const bypassData = data.filter(d => d["Bypass Flag"] === "Bypass");
+    const totalBypasses = bypassData.length;
+
+    if (totalBypasses === 0) {
+      pieSvg.innerHTML = `<circle cx="50" cy="50" r="44" fill="#def7ec" stroke="#107c41" stroke-width="2"/>`;
+      if (pieLegend) pieLegend.innerHTML = `<div style="color:#03543f;font-size:0.8rem;padding:20px;text-align:center;font-weight:600;">✓ 0 Bypasses in selected filter (100% System Regular)</div>`;
+      return;
+    }
 
     const catCounts = {
+      "System & Supervisor Bypass": 0,
       "Biometric & Face Liveness": 0,
       "Network & Timeout Glitch": 0,
       "Camera & Hardware Issue": 0,
       "Special Policy / Corporate": 0,
       "Branch & Wet Signature": 0,
-      "System Done (Regular)": 0
+      "Other Operational Exceptions": 0
     };
 
-    data.forEach(d => {
+    bypassData.forEach(d => {
       const rem = (d.REMARKS || "").toLowerCase();
-      if (d["Bypass Flag"] === "Regular") {
-        catCounts["System Done (Regular)"]++;
-      } else if (rem.includes("biometric") || rem.includes("liveness") || rem.includes("face") || rem.includes("match")) {
+      const trig = (d["Bypass Trigger"] || "").toLowerCase();
+      const status = (d.APPROVAL_STATUS || "").toLowerCase();
+      const combined = `${rem} ${trig} ${status}`;
+
+      if (combined.includes("biometric") || combined.includes("liveness") || combined.includes("face") || combined.includes("match") || combined.includes("photo")) {
         catCounts["Biometric & Face Liveness"]++;
-      } else if (rem.includes("network") || rem.includes("bandwidth") || rem.includes("timeout") || rem.includes("latency") || rem.includes("outage") || rem.includes("server") || rem.includes("connection")) {
+      } else if (combined.includes("network") || combined.includes("bandwidth") || combined.includes("timeout") || combined.includes("latency") || combined.includes("outage") || combined.includes("server") || combined.includes("connection") || combined.includes("slow")) {
         catCounts["Network & Timeout Glitch"]++;
-      } else if (rem.includes("camera") || rem.includes("driver") || rem.includes("hardware") || rem.includes("microphone") || rem.includes("audio")) {
+      } else if (combined.includes("camera") || combined.includes("driver") || combined.includes("hardware") || combined.includes("microphone") || combined.includes("audio") || combined.includes("device")) {
         catCounts["Camera & Hardware Issue"]++;
-      } else if (rem.includes("special") || rem.includes("vip") || rem.includes("director") || rem.includes("corporate") || rem.includes("overseas") || rem.includes("travel") || rem.includes("senior") || rem.includes("disability") || rem.includes("speech")) {
+      } else if (combined.includes("special") || combined.includes("vip") || combined.includes("director") || combined.includes("corporate") || combined.includes("overseas") || combined.includes("travel") || combined.includes("senior") || combined.includes("disability") || combined.includes("speech") || combined.includes("nri")) {
         catCounts["Special Policy / Corporate"]++;
-      } else {
+      } else if (combined.includes("branch") || combined.includes("wet") || combined.includes("signature") || combined.includes("physical") || combined.includes("paper") || combined.includes("form") || combined.includes("offline")) {
         catCounts["Branch & Wet Signature"]++;
+      } else if (combined.includes("as-") || combined.includes("as ") || combined.includes("bypass request") || combined.includes("supervisor") || combined.includes("manager") || combined.includes("override") || combined.includes("approval") || combined.includes("exceptional") || combined.includes("exception") || combined.includes("bypass")) {
+        catCounts["System & Supervisor Bypass"]++;
+      } else {
+        catCounts["Other Operational Exceptions"]++;
       }
     });
 
     const categories = Object.entries(catCounts)
-      .map(([name, count]) => ({ name, count, pct: totalApps > 0 ? (count / totalApps) * 100 : 0 }))
+      .map(([name, count]) => ({
+        name,
+        count,
+        pct: (count / totalBypasses) * 100
+      }))
       .filter(c => c.count > 0)
       .sort((a, b) => b.count - a.count);
 
-    const colors = ["#d83b01", "#0078d4", "#ffaa44", "#107c41", "#8764b8", "#038387"];
+    const colors = ["#d83b01", "#0078d4", "#ffaa44", "#107c41", "#8764b8", "#038387", "#e11d48"];
     let startAngle = 0;
     let pathsHtml = "";
 
     categories.forEach((cat, idx) => {
-      const angle = (cat.count / totalApps) * 360;
+      const angle = (cat.count / totalBypasses) * 360;
       const endAngle = startAngle + angle;
       const color = colors[idx % colors.length];
 
       if (categories.length === 1) {
-        pathsHtml += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}"><title>${cat.name}: 100%</title></circle>`;
+        pathsHtml += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}"><title>${cat.name}: ${cat.count} cases (100.0%)</title></circle>`;
       } else {
         const startRad = (startAngle * Math.PI) / 180;
         const endRad = (endAngle * Math.PI) / 180;
@@ -1635,7 +1743,7 @@ function renderStandalonePieChart(measures, data) {
         pathsHtml += `
           <path d="M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2} Z"
             fill="${color}" stroke="#ffffff" stroke-width="1.5" class="pie-slice">
-            <title>${cat.name}: ${cat.count} cases (${cat.pct.toFixed(1)}%)</title>
+            <title>${cat.name}: ${cat.count} cases (${cat.pct.toFixed(1)}% of bypasses)</title>
           </path>
         `;
       }
@@ -1650,7 +1758,7 @@ function renderStandalonePieChart(measures, data) {
         return `
           <div class="legend-item" style="font-size:0.75rem;">
             <span class="legend-dot" style="background:${color};"></span>
-            <span style="max-width:130px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${cat.name}">${cat.name}</span>
+            <span style="max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${cat.name}">${cat.name}</span>
             <span class="legend-metric">${cat.count} (${cat.pct.toFixed(1)}%)</span>
           </div>
         `;
@@ -1681,7 +1789,7 @@ function renderStandalonePieChart(measures, data) {
         </path>
         <path d="M ${cx} ${cy} L ${x2} ${y2} A ${r} ${r} 0 ${largeArcRegular} 1 50 ${cy - r} Z"
           fill="#0078d4" stroke="#ffffff" stroke-width="1.5" class="pie-slice">
-          <title>Regular: ${regularApps} (${((regularApps/totalApps)*100).toFixed(1)}%)</title>
+          <title>Regular: ${regularApps} (${regularPct.toFixed(1)}%)</title>
         </path>
       `;
     }
@@ -1689,7 +1797,6 @@ function renderStandalonePieChart(measures, data) {
     pieSvg.innerHTML = pathsHtml;
 
     if (pieLegend) {
-      const regPct = totalApps > 0 ? (regularApps / totalApps) * 100 : 0;
       pieLegend.innerHTML = `
         <div class="legend-item">
           <span class="legend-dot bypass"></span>
@@ -1699,7 +1806,7 @@ function renderStandalonePieChart(measures, data) {
         <div class="legend-item">
           <span class="legend-dot regular"></span>
           <span>Regular Cases</span>
-          <span class="legend-metric">${regularApps.toLocaleString()} (${regPct.toFixed(1)}%)</span>
+          <span class="legend-metric">${regularApps.toLocaleString()} (${regularPct.toFixed(1)}%)</span>
         </div>
       `;
     }
@@ -1821,12 +1928,13 @@ function renderMatrixTable(data) {
 
     let totalAll = 0;
     let bypassAll = 0;
+    const maxDayBypass = Math.max(...sortedDays.map(d => d.bypass), 0);
 
     const rowsHtml = sortedDays.map(d => {
       totalAll += d.total;
       bypassAll += d.bypass;
       const pct = d.total > 0 ? (d.bypass / d.total) * 100 : 0;
-      const isPeak = d.bypass >= 5;
+      const isPeak = maxDayBypass > 0 && d.bypass === maxDayBypass;
 
       return `
         <tr>
@@ -1854,8 +1962,8 @@ function renderMatrixTable(data) {
     const footerHtml = `
       <tr style="background:#f1f5f9;font-weight:700;border-top:2px solid var(--border-color);">
         <td colspan="2">Total (${sortedDays.length} days)</td>
-        <td>${totalAll}</td>
-        <td style="color:var(--bypass-color);">${bypassAll}</td>
+        <td>${totalAll.toLocaleString()}</td>
+        <td style="color:var(--bypass-color);">${bypassAll.toLocaleString()}</td>
         <td>
           <div class="table-pct-cell">
             <span style="font-weight:800;color:var(--primary);min-width:44px;">${overallPct.toFixed(1)}%</span>
@@ -1915,8 +2023,8 @@ function renderMatrixTable(data) {
       return `
         <tr>
           <td style="font-weight:600;">${m.name}</td>
-          <td><strong>${m.total}</strong></td>
-          <td><span style="color:var(--bypass-color);font-weight:700;">${m.bypass}</span></td>
+          <td><strong>${m.total.toLocaleString()}</strong></td>
+          <td><span style="color:var(--bypass-color);font-weight:700;">${m.bypass.toLocaleString()}</span></td>
           <td>
             <div class="table-pct-cell">
               <span style="font-weight:700;min-width:44px;">${pct.toFixed(1)}%</span>
@@ -1932,9 +2040,9 @@ function renderMatrixTable(data) {
     const overallPct = totalAll > 0 ? (bypassAll / totalAll) * 100 : 0;
     const footerHtml = `
       <tr style="background:#f1f5f9;font-weight:700;border-top:2px solid var(--border-color);">
-        <td>Total / Average</td>
-        <td>${totalAll}</td>
-        <td style="color:var(--bypass-color);">${bypassAll}</td>
+        <td>Total (${sortedMonths.length} Months)</td>
+        <td>${totalAll.toLocaleString()}</td>
+        <td style="color:var(--bypass-color);">${bypassAll.toLocaleString()}</td>
         <td>
           <div class="table-pct-cell">
             <span style="font-weight:800;color:var(--primary);min-width:44px;">${overallPct.toFixed(1)}%</span>
@@ -1955,11 +2063,10 @@ function renderDrilldownTable(data) {
   const query = searchInput ? searchInput.value.toLowerCase().trim() : "";
   const filtered = query
     ? data.filter(r => 
-        r.APPLICATION_NO.toLowerCase().includes(query) ||
-        r.ASSIGNED_TO.toLowerCase().includes(query) ||
-        r.USER_ID.toLowerCase().includes(query) ||
-        r.REMARKS.toLowerCase().includes(query) ||
-        r.APPROVAL_STATUS.toLowerCase().includes(query)
+        (r.APPLICATION_NO || "").toLowerCase().includes(query) ||
+        (r.USER_ID || "").toLowerCase().includes(query) ||
+        (r.REMARKS || "").toLowerCase().includes(query) ||
+        (r.APPROVAL_STATUS || "").toLowerCase().includes(query)
       )
     : data;
 
@@ -2005,7 +2112,7 @@ function renderDrilldownTable(data) {
   }
 
   if (displayRows.length === 0) {
-    drilldownTableBody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-muted);">No applications match the search/filter criteria</td></tr>`;
+    drilldownTableBody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-muted);">No applications match the search/filter criteria</td></tr>`;
     return;
   }
 
@@ -2039,7 +2146,6 @@ function renderDrilldownTable(data) {
         <td>${r.APPROVAL_DATE}</td>
         <td>${statusBadge}</td>
         <td><span style="font-weight:600;color:var(--accent-blue);">${r.USER_ID}</span></td>
-        <td>${r.ASSIGNED_TO}</td>
         <td>${triggerInfo}</td>
         <td style="font-size:0.78rem;color:#475569;max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${r.REMARKS}">
           ${r.REMARKS}
@@ -2052,7 +2158,7 @@ function renderDrilldownTable(data) {
 // Export Filtered Records to CSV
 function exportCurrentDataToCSV() {
   const data = getFilteredData();
-  const headers = ["APPLICATION_NO", "APPROVAL_DATE", "APPROVAL_STATUS", "USER_ID", "ASSIGNED_TO", "REMARKS", "Bypass Flag", "Month-Year"];
+  const headers = ["APPLICATION_NO", "APPROVAL_DATE", "APPROVAL_STATUS", "USER_ID", "REMARKS", "Bypass Flag", "Month-Year"];
   const csvRows = [headers.join(",")];
 
   data.forEach(row => {
@@ -2061,7 +2167,6 @@ function exportCurrentDataToCSV() {
       `"${row.APPROVAL_DATE}"`,
       `"${row.APPROVAL_STATUS}"`,
       `"${row.USER_ID}"`,
-      `"${row.ASSIGNED_TO}"`,
       `"${(row.REMARKS || '').replace(/"/g, '""')}"`,
       `"${row["Bypass Flag"]}"`,
       `"${row["Month-Year"]}"`
@@ -2143,12 +2248,18 @@ function applyNewDataset(rawRows, filename) {
   processedData = transformRows(rawRows);
   currentPage = 1;
 
+  // Cache in sessionStorage for persistence across refreshes
+  try {
+    sessionStorage.setItem("pivc_active_data", JSON.stringify({ filename, rawRows }));
+  } catch (e) {
+    console.warn("Could not cache dataset to sessionStorage (size limit exceeded):", e);
+  }
+
   // Reset Slicers to "All"
   activeFilters = {
     monthYear: "All",
     approvalStatus: "All",
-    userId: "All",
-    assignedTo: "All"
+    userId: "All"
   };
 
   populateSlicers();
@@ -2174,7 +2285,7 @@ function applyNewDataset(rawRows, filename) {
     bannerHeading.style.color = "#065f46";
   }
   if (bannerSubtext) {
-    bannerSubtext.textContent = "All KPIs, monthly trends, user performance charts, donut breakdown, and summary matrix have been updated with your original dataset.";
+    bannerSubtext.textContent = "All KPIs, monthly trends, user performance charts, donut breakdown, and summary matrix have been updated with your dataset.";
   }
 
   updateDashboard();
@@ -2191,7 +2302,6 @@ function updateDashboard() {
   try { renderStackedMonthlyBarChart(data); } catch (e) { console.error("Error in renderStackedMonthlyBarChart:", e); }
   try { renderDailyBypassChart(data); } catch (e) { console.error("Error in renderDailyBypassChart:", e); }
   try { renderUserWiseBypassBar(data); } catch (e) { console.error("Error in renderUserWiseBypassBar:", e); }
-  try { renderAssigneeWiseBypassBar(data); } catch (e) { console.error("Error in renderAssigneeWiseBypassBar:", e); }
   try { renderStandalonePieChart(measures, data); } catch (e) { console.error("Error in renderStandalonePieChart:", e); }
   try { renderDonutChart(measures); } catch (e) { console.error("Error in renderDonutChart:", e); }
   try { renderMatrixTable(data); } catch (e) { console.error("Error in renderMatrixTable:", e); }
@@ -2329,7 +2439,14 @@ function setupV1ScrollControls() {
   if (monthPicker) {
     monthPicker.addEventListener("change", (e) => {
       v1SelectedMonth = e.target.value;
-      renderMonthlyBypassColumnChart(getFilteredData());
+      if (activeFilters.monthYear !== e.target.value) {
+        activeFilters.monthYear = e.target.value;
+        if (monthSelect) monthSelect.value = e.target.value;
+        currentPage = 1;
+        updateDashboard();
+      } else {
+        renderMonthlyBypassColumnChart(getFilteredData());
+      }
     });
   }
 
@@ -2492,14 +2609,6 @@ function setupChartModeListeners() {
     renderUserWiseBypassBar(getFilteredData());
   });
 
-  // Assignee Workload Modes
-  bindToggleGroup(["assigneeMetricBypass", "assigneeMetricTotal", "assigneeMetricRate"], id => {
-    if (id === "assigneeMetricBypass") currentAssigneeMetricMode = "bypass";
-    else if (id === "assigneeMetricTotal") currentAssigneeMetricMode = "total";
-    else if (id === "assigneeMetricRate") currentAssigneeMetricMode = "rate";
-    renderAssigneeWiseBypassBar(getFilteredData());
-  });
-
   // Drilldown Table Height Modes
   const drilldownWrapper = document.getElementById("drilldownTableWrapper");
   bindToggleGroup(["tblHeightCompact", "tblHeightStandard", "tblHeightExpanded"], id => {
@@ -2530,11 +2639,30 @@ async function initDashboard() {
   setupFileUpload();
   setupPagination();
 
-  // Render immediately with baseline data so visuals appear without delay
-  updateDashboard();
+  // Setup Sample Load button listener
+  const btnLoadSample = document.getElementById("btnLoadSample");
+  if (btnLoadSample) {
+    btnLoadSample.addEventListener("click", () => {
+      autoLoadDataset();
+    });
+  }
 
-  // Then auto-load CSV asynchronously if running over web server
-  await autoLoadDataset();
+  // Restore previously uploaded dataset from sessionStorage if available
+  try {
+    const cached = sessionStorage.getItem("pivc_active_data");
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && parsed.rawRows && parsed.rawRows.length > 0) {
+        applyNewDataset(parsed.rawRows, parsed.filename || "Uploaded Dataset");
+        return;
+      }
+    }
+  } catch (e) {
+    console.warn("Could not retrieve session cached dataset:", e);
+  }
+
+  // Render initial dashboard state
+  updateDashboard();
 }
 
 if (document.readyState === "loading") {
